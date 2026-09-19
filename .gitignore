@@ -24,3 +24,11 @@ artifacts/
 # OS/editor
 .DS_Store
 .vscode/
+
+# mlflow local tracking artifacts from test runs
+mlruns/
+mlflow.db
+segment_eval_*.csv
+
+# ruff cache
+.ruff_cache/
