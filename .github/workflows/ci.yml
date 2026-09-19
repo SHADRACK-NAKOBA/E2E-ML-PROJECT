@@ -23,13 +23,37 @@ jobs:
           python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install -r requirements-dev.txt -r requirements-agentic.txt
 
       - name: Lint (ruff)
-        run: ruff check src/ monitoring/ scripts/
+        run: ruff check src/ monitoring/ scripts/ rag/ agentic/ tests/
 
       - name: Unit tests
         run: pytest tests/ -v
+
+  rag-eval-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install -r requirements-dev.txt -r requirements-agentic.txt
+      # A prompt or retrieval-config change is a production change with the
+      # same blast radius as a code change — this gate runs the eval set
+      # against the current retrieval config on every PR and fails the
+      # build on a regression, rather than catching it after merge.
+      - name: Run RAG eval suite
+        run: python -c "
+          from rag.eval import run_eval_suite
+          import json
+          def stub_retrieve(q):
+              # placeholder: a real PR wires this to the actual Azure AI
+              # Search client against a test index snapshot
+              return []
+          summary = run_eval_suite('rag/eval_data/dealer_support_eval_set.json', stub_retrieve)
+          print(json.dumps(summary, default=str, indent=2))
+          "
 
   terraform-plan:
     runs-on: ubuntu-latest

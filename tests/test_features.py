@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from features import build_feature_frame, POST_HOC_LEAKAGE_COLUMNS  # noqa: E402
+from features import POST_HOC_LEAKAGE_COLUMNS, build_feature_frame
 
 
 def _base_row():

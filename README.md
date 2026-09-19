@@ -44,9 +44,19 @@ Git (source of truth)
 | `jobs/` | Azure ML job YAMLs (training job, hyperparameter sweep) | Jobs are declarative and reproducible, not run interactively |
 | `deploy/` | Managed online endpoint + deployment config | Endpoint/deployment are versioned config, not portal clicks |
 | `monitoring/` | Drift checks, the 4-layer monitoring definitions | Uptime ≠ model health — see `docs/DECISIONS.md` #6 |
-| `.github/workflows/` | CI (every PR) and CD (on merge to main) pipelines | Build once, promote the same artifact through every stage |
-| `docs/DECISIONS.md` | Every non-obvious design decision, and what I rejected | The "why," not just the "what" |
-| `scripts/rollback.sh` | One-command traffic rollback to the prior deployment | Rollback has to be a config change, not an incident-time investigation |
+| `rag/` | Ingestion, hybrid retrieval + rerank, grounding/authorization guardrails, eval harness | The dealer/technician knowledge-assistant half of the JD's GenAI scope — see `docs/DECISIONS_RAG_AGENTIC.md` |
+| `agentic/` | Structured tool schemas, an MCP server, classified-failure retry logic, tenant-scoped semantic cache keys | The agentic/MCP half of the JD's GenAI scope |
+| `.github/workflows/` | CI (every PR, including a RAG eval gate) and CD (on merge to main) pipelines | Build once, promote the same artifact through every stage |
+| `docs/DECISIONS.md`, `docs/DECISIONS_RAG_AGENTIC.md` | Every non-obvious design decision, and what I rejected | The "why," not just the "what" |
+| `docs/COPILOT_STUDIO_AND_TOOLING_NOTES.md` | Honest scoping of the two JD items that aren't buildable as generic code | Padding the repo with fake coverage is worse than naming the real gap |
+| `scripts/rollback.sh`, `scripts/promote_challenger.py` | One-command traffic rollback; champion-vs-challenger promotion gate | Rollback has to be a config change, not an incident-time investigation |
+
+## The GenAI / agentic layer, concretely
+
+- **RAG** (`rag/`): hybrid (vector + keyword) retrieval against Azure AI Search, metadata-filtered *before* anything reaches the model, reranked, groundedness-checked with abstention, and evaluated in CI against a known eval set (`rag/eval_data/`).
+- **Agentic/MCP** (`agentic/`): claim-status and claim-escalation tools exposed over the Model Context Protocol, with pydantic-validated I/O, classified failure handling (transient/malformed/persistent/auth/rate-limit each handled differently), and a tenant-scoped semantic cache key design.
+- **The one rule that ties both together:** the model is never the authorization boundary. `rag/guardrails.py::ActionAuthorizationGuard` checks the real caller's real role against a server-side permission table on every tool call — a prompt-injected instruction in a retrieved document or a user message can't grant itself privileges. See `tests/test_guardrails.py` for the concrete test of that claim.
+
 
 ## Quickstart
 

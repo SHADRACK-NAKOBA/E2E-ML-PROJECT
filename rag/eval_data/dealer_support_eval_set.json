@@ -1,0 +1,18 @@
+[
+  {
+    "question": "What's the torque spec for the rear axle nut on a Touring model?",
+    "expected_source_doc_ids": ["repair_manual_touring_rear_axle"]
+  },
+  {
+    "question": "Is there an open service bulletin for telematics unit false fault codes?",
+    "expected_source_doc_ids": ["service_bulletin_tcu_fault_0142"]
+  },
+  {
+    "question": "What's the warranty coverage window for a transmission replacement under CPO?",
+    "expected_source_doc_ids": ["warranty_policy_cpo_powertrain"]
+  },
+  {
+    "question": "Can a claim be pre-approved without technician review for a brake system repair?",
+    "expected_source_doc_ids": ["warranty_policy_approval_workflow"]
+  }
+]

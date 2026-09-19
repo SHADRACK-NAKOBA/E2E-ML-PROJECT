@@ -1,0 +1,7 @@
+# Additional dependencies for rag/ and agentic/ — kept separate from
+# requirements-dev.txt so the core platform (terraform/jobs/deploy/src) has
+# no dependency on the agentic stack, and vice versa.
+pydantic==2.7.1
+mcp==1.6.0
+azure-search-documents==11.5.1
+azure-identity==1.16.0
