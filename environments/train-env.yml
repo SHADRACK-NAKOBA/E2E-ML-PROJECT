@@ -1,0 +1,9 @@
+# Pinned training/serving environment — the runtime is a release artifact,
+# not an assumption about what happened to be installed on someone's laptop.
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+name: nakoba-train-env
+version: 1
+build:
+  path: .
+  dockerfile_path: Dockerfile
+description: "Pinned conda env for Nakoba escalation-risk training/serving"

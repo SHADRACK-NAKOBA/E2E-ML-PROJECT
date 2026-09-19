@@ -1,0 +1,25 @@
+# Champion/challenger traffic split lives at the endpoint level (see
+# scripts/promote_challenger.py and scripts/rollback.sh) — this file defines
+# ONE deployment (a model version behind the endpoint). Multiple deployment
+# files, one per model version, are what traffic gets split across.
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+name: champion
+endpoint_name: nakoba-escalation-risk-ep
+model: azureml:nakoba-escalation-risk@latest   # pinned to a specific registered version at deploy time, not floating
+environment: azureml:nakoba-train-env@latest
+code_configuration:
+  code: ../src
+  scoring_script: score.py
+instance_type: Standard_DS3_v2
+instance_count: 2
+request_settings:
+  request_timeout_ms: 5000
+  max_concurrent_requests_per_instance: 4
+liveness_probe:
+  initial_delay: 30
+  period: 10
+  timeout: 5
+readiness_probe:
+  initial_delay: 30
+  period: 10
+  timeout: 5

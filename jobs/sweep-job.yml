@@ -1,0 +1,40 @@
+# Bayesian hyperparameter search over a Terraform-provisioned compute cluster.
+# Chosen over grid search because the search space has enough dimensions that
+# exhaustive grid search burns compute for marginal gain — Bayesian search
+# uses earlier trial results to choose the next configuration intelligently.
+$schema: https://azuremlschemas.azureedge.net/latest/sweepJob.schema.json
+type: sweep
+trial:
+  code: ../src
+  command: >-
+    python train.py
+    --data_path ${{inputs.claims_data}}
+    --n_estimators ${{search_space.n_estimators}}
+    --max_depth ${{search_space.max_depth}}
+    --learning_rate ${{search_space.learning_rate}}
+  environment: azureml:nakoba-train-env@latest
+inputs:
+  claims_data:
+    type: uri_file
+    path: azureml://datastores/workspaceblobstore/paths/nakoba/data/synthetic_claims.csv
+compute: azureml:cpu-cluster-dev
+sampling_algorithm: bayesian
+search_space:
+  n_estimators:
+    type: choice
+    values: [150, 250, 300, 400, 500]
+  max_depth:
+    type: choice
+    values: [3, 4, 5, 6, 8]
+  learning_rate:
+    type: uniform
+    min_value: 0.01
+    max_value: 0.2
+objective:
+  goal: maximize
+  primary_metric: f1
+limits:
+  max_total_trials: 40
+  max_concurrent_trials: 4
+display_name: nakoba-escalation-risk-sweep
+experiment_name: nakoba-escalation-risk

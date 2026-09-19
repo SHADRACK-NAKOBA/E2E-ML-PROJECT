@@ -1,0 +1,13 @@
+# Managed online endpoint over self-managed AKS — single model, moderate/
+# predictable traffic, and built-in traffic-splitting is exactly what
+# canary + rollback need. See docs/DECISIONS.md #5.
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineEndpoint.schema.json
+name: nakoba-escalation-risk-ep
+auth_mode: aad_token  # AAD-token auth, not a static key — consistent with the
+                       # "no long-lived secrets" identity stance across the repo
+identity:
+  type: user_assigned
+  user_assigned_identities:
+    - ${{env.ENDPOINT_IDENTITY_ID}}
+tags:
+  project: nakoba

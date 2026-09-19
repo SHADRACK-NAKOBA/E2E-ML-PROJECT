@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+terraform/envs/*.tfbackend
+
+# Data / artifacts — never commit real or generated data
+data/
+*.csv
+mlruns/
+artifacts/
+
+# Secrets / env
+.env
+*.pem
+
+# OS/editor
+.DS_Store
+.vscode/

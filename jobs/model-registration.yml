@@ -1,0 +1,19 @@
+# A trained model is NOT deployable until it's registered here with
+# evaluation metrics, the training-data reference, and an approving
+# reviewer attached as metadata. Blob storage tells you where the bytes
+# are; this registry entry tells you what the asset is and whether it's
+# cleared for production. See docs/DECISIONS.md #4.
+$schema: https://azuremlschemas.azureedge.net/latest/model.schema.json
+name: nakoba-escalation-risk
+path: azureml://jobs/${{job_name}}/outputs/artifacts/paths/model
+description: "Warranty/service escalation-risk classifier for connected vehicles"
+properties:
+  training_job: ${{job_name}}
+  training_data_ref: azureml://datastores/workspaceblobstore/paths/nakoba/data/synthetic_claims.csv
+  f1_validation: ${{metrics.f1}}
+  roc_auc_validation: ${{metrics.roc_auc}}
+  approving_reviewer: ${{env.APPROVER_IDENTITY}}
+  approval_timestamp: ${{env.APPROVAL_TIMESTAMP}}
+tags:
+  domain: warranty-escalation
+  stage: candidate

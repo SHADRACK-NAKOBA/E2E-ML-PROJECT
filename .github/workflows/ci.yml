@@ -1,0 +1,68 @@
+# Runs on every pull request. Branch protection (configured in repo Settings,
+# see docs/DECISIONS.md and README Quickstart) requires these checks to pass
+# by name before a merge is allowed — a PR literally cannot merge if lint,
+# tests, the Terraform plan, or the secret scan haven't reported green.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  id-token: write   # required for OIDC federation to Azure AD — no long-lived
+  contents: read     # cloud credential secret stored in GitHub at all
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check src/ monitoring/ scripts/
+
+      - name: Unit tests
+        run: pytest tests/ -v
+
+  terraform-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform fmt check
+        run: terraform -chdir=terraform fmt -check -recursive
+
+      - name: Terraform init (dev backend)
+        run: terraform -chdir=terraform init -backend-config=envs/dev-backend.tfbackend
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform plan
+        run: terraform -chdir=terraform plan -var-file=envs/dev.tfvars -no-color
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

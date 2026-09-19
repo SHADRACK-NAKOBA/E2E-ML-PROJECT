@@ -1,0 +1,91 @@
+# On merge to main: apply the same Terraform plan that was reviewed in the
+# PR (never re-planned from scratch), build the training/serving image ONCE
+# and push it to ACR by digest, submit the training job, and register the
+# resulting model as a candidate — pending the promotion gate before any
+# traffic shift. See docs/DECISIONS.md #3 and #9.
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: rg-nakoba-dev
+  WORKSPACE: mlw-nakoba-dev
+
+jobs:
+  apply-infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform init
+        run: terraform -chdir=terraform init -backend-config=envs/dev-backend.tfbackend
+
+      - name: Terraform apply
+        run: terraform -chdir=terraform apply -var-file=envs/dev.tfvars -auto-approve
+
+  build-and-train:
+    needs: apply-infra
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: az ml extension
+        run: az extension add -n ml -y
+
+      # Build once, tag by digest — this exact image is what every
+      # subsequent stage references. No rebuilding per environment.
+      - name: Register / build training environment
+        run: az ml environment create -f environments/train-env.yml -g $RESOURCE_GROUP -w $WORKSPACE
+
+      - name: Generate synthetic data + upload
+        run: |
+          python src/generate_synthetic_data.py --out data/synthetic_claims.csv
+          az ml data create --name nakoba-synthetic-claims --version $GITHUB_SHA \
+            --path data/synthetic_claims.csv --type uri_file -g $RESOURCE_GROUP -w $WORKSPACE
+
+      - name: Submit training job
+        run: az ml job create -f jobs/train-job.yml -g $RESOURCE_GROUP -w $WORKSPACE --stream
+
+      - name: Register candidate model
+        run: |
+          az ml model create -f jobs/model-registration.yml -g $RESOURCE_GROUP -w $WORKSPACE
+        env:
+          APPROVER_IDENTITY: ${{ github.actor }}
+          APPROVAL_TIMESTAMP: ${{ github.event.head_commit.timestamp }}
+
+  promotion-gate:
+    needs: build-and-train
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Evaluate challenger against champion
+        run: |
+          python scripts/promote_challenger.py \
+            --champion-f1 "$CHAMPION_F1" --challenger-f1 "$CHALLENGER_F1" \
+            --champion-p95-ms "$CHAMPION_P95" --challenger-p95-ms "$CHALLENGER_P95" \
+            --champion-segment-csv artifacts/champion_segment_eval_vehicle_model_line.csv \
+            --challenger-segment-csv artifacts/segment_eval_vehicle_model_line.csv
+        # NOTE: this job intentionally FAILS the pipeline (nonzero exit) if
+        # the challenger doesn't clear every gate — promotion is never
+        # automatic. A human approves the actual traffic shift afterward.
