@@ -3,7 +3,7 @@
 # by other reviewers. This is the mechanism, not just the phrase, behind
 # "reviewing the 20% that needs my judgment." See docs/DECISIONS.md.
 
-/terraform/            @<your-github-username>
-/.github/workflows/    @<your-github-username>
-/deploy/               @<your-github-username>
-/jobs/model-registration.yml  @<your-github-username>
+/terraform/            @SHADRACK-NAKOBA>
+/.github/workflows/    @SHADRACK-NAKOBA>
+/deploy/               @SHADRACK-NAKOBA>
+/jobs/model-registration.yml  @SHADRACK-NAKOBA>
