@@ -191,7 +191,7 @@ jobs:
         id: model_version
         shell: bash
         run: |
-          VERSION="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          VERSION="${GITHUB_RUN_ID}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Challenger model version: $VERSION"
 
