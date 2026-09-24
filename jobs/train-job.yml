@@ -2,22 +2,32 @@
 # Run interactively == no record. Run as a job == durable lineage: exact
 # code snapshot, exact environment digest, exact data reference, all logged.
 $schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+
 code: ../src
+
 command: >-
   python train.py
   --data_path ${{inputs.claims_data}}
+  --output_dir ${{outputs.evaluation_output}}
   --n_estimators ${{inputs.n_estimators}}
   --max_depth ${{inputs.max_depth}}
   --learning_rate ${{inputs.learning_rate}}
-environment: azureml:nakoba-train-env@latest
+
+environment: azureml:nakoba-train-env:3
 compute: azureml:cpu-cluster-dev
+
 inputs:
   claims_data:
     type: uri_file
-    path: azureml://datastores/workspaceblobstore/paths/nakoba/data/synthetic_claims.csv
+    path: azureml:nakoba-synthetic-claims:1
   n_estimators: 300
   max_depth: 5
   learning_rate: 0.05
+
+outputs:
+  evaluation_output:
+    type: uri_folder
+
 display_name: nakoba-escalation-risk-train
 experiment_name: nakoba-escalation-risk
 description: "Trains the connected-vehicle warranty escalation-risk classifier"

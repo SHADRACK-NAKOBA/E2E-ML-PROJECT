@@ -1,0 +1,29 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+
+code: ../src
+
+command: >-
+  python evaluate_model.py
+  --data_path ${{inputs.claims_data}}
+  --model_uri ${{inputs.model}}
+  --output_dir ${{outputs.evaluation_output}}
+
+environment: azureml:nakoba-train-env:3
+compute: azureml:cpu-cluster-dev
+
+inputs:
+  claims_data:
+    type: uri_file
+    path: azureml:nakoba-synthetic-claims:1
+
+  model:
+    type: mlflow_model
+    path: azureml:nakoba-escalation-risk:1
+
+outputs:
+  evaluation_output:
+    type: uri_folder
+
+display_name: nakoba-champion-evaluation
+experiment_name: nakoba-model-evaluation
+description: "Evaluates the registered champion using the same metrics and validation split as challenger training."

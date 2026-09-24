@@ -1,11 +1,9 @@
 """
-Training entry point for the escalation-risk model.
+Evaluate an existing registered MLflow/XGBoost model.
 
-Run as an Azure ML job (see jobs/train-job.yml), never interactively — every
-run this way leaves a durable MLflow record of the exact code version, data
-reference, and environment that produced the model. That lineage is what
-lets a finance or service-quality reviewer ask "why did the model flag this
-claim" months later and get a real answer instead of a guess.
+This is used to establish champion metrics with the same data split,
+feature engineering, latency measurement, and segment definitions used
+for challenger evaluation.
 """
 
 import argparse
@@ -13,28 +11,22 @@ import json
 import time
 from pathlib import Path
 
-import mlflow
+import mlflow.xgboost
 import numpy as np
 import pandas as pd
 from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import train_test_split
-from xgboost import XGBClassifier
 
 from features import TARGET, build_feature_frame
 
 
 def evaluate_per_segment(model, X_test, y_test, segment_series, segment_name):
-    """Per-segment evaluation — a model that's better in aggregate but worse
-    for one vehicle model line or dealer region is a fairness problem, not
-    just a performance number. See docs/DECISIONS.md #9.
-    """
     results = []
 
     for segment_value in segment_series.unique():
         mask = segment_series == segment_value
 
         if mask.sum() < 20:
-            # Too few samples for a meaningful per-segment score.
             continue
 
         preds = model.predict(X_test[mask])
@@ -51,30 +43,19 @@ def evaluate_per_segment(model, X_test, y_test, segment_series, segment_name):
     return pd.DataFrame(results)
 
 
-def main(
-    data_path: str,
-    n_estimators: int,
-    max_depth: int,
-    learning_rate: float,
-    output_dir: str,
-):
-    # Azure ML mounts this directory as the explicit evaluation output.
+def main(data_path: str, model_uri: str, output_dir: str):
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Keep the existing MLflow lineage and automatic model/run logging.
-    mlflow.autolog()
-
     df = pd.read_csv(data_path)
 
-    # Keep raw segment columns for per-segment evaluation before one-hot encoding.
     segment_cols = df[["vehicle_model_line", "dealer_region"]].copy()
 
     feats = build_feature_frame(df, is_training=True)
     X = feats.drop(columns=[TARGET])
     y = feats[TARGET]
 
-    X_train, X_test, y_train, y_test, _seg_train, seg_test = train_test_split(
+    _, X_test, _, y_test, _, seg_test = train_test_split(
         X,
         y,
         segment_cols,
@@ -83,22 +64,20 @@ def main(
         stratify=y,
     )
 
-    model = XGBClassifier(
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        learning_rate=learning_rate,
-        eval_metric="logloss",
-        random_state=42,
-    )
+    print(f"Loading registered champion model from: {model_uri}")
+    model = mlflow.xgboost.load_model(model_uri)
 
-    model.fit(X_train, y_train)
+    # Align evaluation columns to the exact feature schema expected by
+    # the registered XGBoost model.
+    expected_features = model.get_booster().feature_names
+
+    if expected_features:
+        X_test = X_test.reindex(columns=expected_features, fill_value=0)
 
     preds = model.predict(X_test)
     proba = model.predict_proba(X_test)[:, 1]
 
-    # Measure single-record model inference latency on a representative
-    # validation sample. This is model-level latency inside the training
-    # environment, not end-to-end Azure endpoint/network latency.
+    # Same single-record latency methodology used in train.py.
     latency_ms = []
     latency_sample = X_test.head(min(200, len(X_test)))
 
@@ -125,19 +104,14 @@ def main(
         "p95_inference_latency_ms": p95_latency_ms,
     }
 
-    # Preserve MLflow metric tracking.
-    mlflow.log_metrics(metrics)
-
-    # Also create a deterministic machine-readable metrics artifact for CI/CD.
     metrics_path = output_path / "metrics.json"
 
     with metrics_path.open("w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
-    print("Overall metrics:", metrics)
+    print("Champion metrics:", metrics)
     print(f"Evaluation metrics written to: {metrics_path}")
 
-    # Generate per-segment evaluation artifacts for the promotion gate.
     segment_evaluations = [
         ("vehicle_model_line", seg_test["vehicle_model_line"]),
         ("dealer_region", seg_test["dealer_region"]),
@@ -155,37 +129,21 @@ def main(
         seg_path = output_path / f"segment_eval_{name}.csv"
         seg_df.to_csv(seg_path, index=False)
 
-        # Keep the same artifacts in MLflow for experiment lineage.
-        mlflow.log_artifact(str(seg_path))
-
         print(f"\nPer-segment F1 ({name}):\n{seg_df}")
         print(f"Segment evaluation written to: {seg_path}")
-
-    # mlflow.sklearn wraps models via skops, which does not trust XGBoost's
-    # native Booster type by default (as of mlflow>=2.11 / skops security
-    # hardening). XGBClassifier needs the xgboost-specific flavor, not the
-    # generic sklearn one, even though it exposes the sklearn API.
-    mlflow.xgboost.log_model(
-        model,
-        artifact_path="model",
-    )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--data_path", type=str, required=True)
+    parser.add_argument("--model_uri", type=str, required=True)
     parser.add_argument("--output_dir", type=str, required=True)
-    parser.add_argument("--n_estimators", type=int, default=300)
-    parser.add_argument("--max_depth", type=int, default=5)
-    parser.add_argument("--learning_rate", type=float, default=0.05)
 
     args = parser.parse_args()
 
     main(
         args.data_path,
-        args.n_estimators,
-        args.max_depth,
-        args.learning_rate,
+        args.model_uri,
         args.output_dir,
     )

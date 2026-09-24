@@ -33,10 +33,11 @@ module "networking" {
 module "identity" {
   source              = "./modules/identity"
   resource_group_name = azurerm_resource_group.nakoba.name
-  location             = azurerm_resource_group.nakoba.location
+  location            = azurerm_resource_group.nakoba.location
   environment         = var.environment
   key_vault_id        = module.workspace.key_vault_id
   storage_account_id  = module.workspace.storage_account_id
+  acr_id              = module.workspace.acr_id
   tags                = local.tags
 }
 
