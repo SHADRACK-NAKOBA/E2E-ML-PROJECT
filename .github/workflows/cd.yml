@@ -242,6 +242,10 @@ jobs:
         run: |
           az extension add --name ml --yes
 
+      - name: Install promotion gate dependency
+        run: |
+          python -m pip install "pandas==2.2.1"
+
       - name: Submit champion evaluation
         id: champion_eval
         shell: bash
