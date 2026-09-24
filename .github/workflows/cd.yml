@@ -135,9 +135,10 @@ jobs:
 
       - name: Register immutable training data
         run: |
+          DATA_VERSION="${GITHUB_SHA:0:12}"
           az ml data create \
             --name nakoba-synthetic-claims \
-            --version "$GITHUB_SHA" \
+            --version "$DATA_VERSION" \
             --path data/synthetic_claims.csv \
             --type uri_file \
             --resource-group "$RESOURCE_GROUP" \
