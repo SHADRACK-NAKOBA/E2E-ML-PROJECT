@@ -32,3 +32,4 @@ segment_eval_*.csv
 
 # ruff cache
 .ruff_cache/
+!terraform/envs/dev-backend.tfbackend

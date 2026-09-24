@@ -1,0 +1,6 @@
+# Fill in with your own remote state storage account before running
+# `terraform init -backend-config=envs/dev-backend.tfbackend`.
+resource_group_name  = "rg-tfstate"
+storage_account_name = "sttfstatenakoba"
+container_name       = "tfstate"
+key                  = "nakoba-dev.tfstate"
