@@ -152,7 +152,7 @@ jobs:
             --file jobs/train-job.yml \
             --resource-group "$RESOURCE_GROUP" \
             --workspace-name "$WORKSPACE" \
-            --set inputs.claims_data.path="azureml:nakoba-synthetic-claims:${GITHUB_SHA}" \
+            --set inputs.claims_data.path="azureml:nakoba-synthetic-claims:${GITHUB_SHA:0:12}" \
             --query name \
             --output tsv)
 
@@ -250,7 +250,7 @@ jobs:
             --file jobs/evaluate-champion.yml \
             --resource-group "$RESOURCE_GROUP" \
             --workspace-name "$WORKSPACE" \
-            --set inputs.claims_data.path="azureml:nakoba-synthetic-claims:${GITHUB_SHA}" \
+            --set inputs.claims_data.path="azureml:nakoba-synthetic-claims:${GITHUB_SHA:0:12}" \
                   inputs.model.path="azureml:${CHAMPION_MODEL_NAME}:${CHAMPION_MODEL_VERSION}" \
             --query name \
             --output tsv)
@@ -268,7 +268,7 @@ jobs:
             --file jobs/evaluate-challenger.yml \
             --resource-group "$RESOURCE_GROUP" \
             --workspace-name "$WORKSPACE" \
-            --set inputs.claims_data.path="azureml:nakoba-synthetic-claims:${GITHUB_SHA}" \
+            --set inputs.claims_data.path="azureml:nakoba-synthetic-claims:${GITHUB_SHA:0:12}" \
                   inputs.model.path="azureml:${CHALLENGER_MODEL_NAME}:${CHALLENGER_VERSION}" \
             --query name \
             --output tsv)
