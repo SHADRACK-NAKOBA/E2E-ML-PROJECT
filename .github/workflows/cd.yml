@@ -1,13 +1,25 @@
-# On merge to main: apply the same Terraform plan that was reviewed in the
-# PR (never re-planned from scratch), build the training/serving image ONCE
-# and push it to ACR by digest, submit the training job, and register the
-# resulting model as a candidate — pending the promotion gate before any
-# traffic shift. See docs/DECISIONS.md #3 and #9.
+# Runs after approved changes are merged to main.
+#
+# Infrastructure is authenticated through GitHub OIDC with no long-lived
+# Azure client secret. Terraform creates a saved plan in this workflow run
+# and applies exactly that saved plan.
+#
+# ML delivery follows a champion/challenger pattern:
+#   1. create immutable training data
+#   2. train challenger
+#   3. register exact training-job model artifact
+#   4. evaluate champion and challenger using the same evaluator
+#   5. compare F1, p95 latency, dealer-region F1, and vehicle-model-line F1
+#   6. block promotion unless every gate passes
+#
+# Passing the gate makes the challenger eligible for controlled promotion.
+# This workflow does not automatically shift production traffic.
 name: CD
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   id-token: write
@@ -16,15 +28,22 @@ permissions:
 env:
   RESOURCE_GROUP: rg-nakoba-dev
   WORKSPACE: mlw-nakoba-dev
+  CHAMPION_MODEL_NAME: nakoba-escalation-risk
+  CHAMPION_MODEL_VERSION: "1"
+  CHALLENGER_MODEL_NAME: nakoba-escalation-risk-challenger
 
 jobs:
   apply-infra:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
 
-      - name: Azure login (OIDC)
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Azure login with GitHub OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -32,60 +51,360 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Terraform init
-        run: terraform -chdir=terraform init -backend-config=envs/dev-backend.tfbackend
+        run: |
+          terraform -chdir=terraform init \
+            -backend-config=envs/dev-backend.tfbackend
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: "true"
+          ARM_USE_AZUREAD: "true"
 
-      - name: Terraform apply
-        run: terraform -chdir=terraform apply -var-file=envs/dev.tfvars -auto-approve
+      - name: Terraform validate
+        run: |
+          terraform -chdir=terraform validate
 
-  build-and-train:
+      - name: Create saved Terraform plan
+        run: |
+          terraform -chdir=terraform plan \
+            -var-file=envs/dev.tfvars \
+            -out=tfplan
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: "true"
+          ARM_USE_AZUREAD: "true"
+
+      - name: Apply saved Terraform plan
+        run: |
+          terraform -chdir=terraform apply \
+            -auto-approve \
+            tfplan
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: "true"
+          ARM_USE_AZUREAD: "true"
+
+  train-and-register:
     needs: apply-infra
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Azure login (OIDC)
+    outputs:
+      challenger_version: ${{ steps.model_version.outputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Azure login with GitHub OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: az ml extension
-        run: az extension add -n ml -y
-
-      # Build once, tag by digest — this exact image is what every
-      # subsequent stage references. No rebuilding per environment.
-      - name: Register / build training environment
-        run: az ml environment create -f environments/train-env.yml -g $RESOURCE_GROUP -w $WORKSPACE
-
-      - name: Generate synthetic data + upload
+      - name: Install Azure ML CLI extension
         run: |
-          python src/generate_synthetic_data.py --out data/synthetic_claims.csv
-          az ml data create --name nakoba-synthetic-claims --version $GITHUB_SHA \
-            --path data/synthetic_claims.csv --type uri_file -g $RESOURCE_GROUP -w $WORKSPACE
+          az extension add --name ml --yes
 
-      - name: Submit training job
-        run: az ml job create -f jobs/train-job.yml -g $RESOURCE_GROUP -w $WORKSPACE --stream
-
-      - name: Register candidate model
+      - name: Register training environment
         run: |
-          az ml model create -f jobs/model-registration.yml -g $RESOURCE_GROUP -w $WORKSPACE
+          az ml environment create \
+            --file environments/train-env.yml \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE"
+
+      - name: Generate synthetic training data
+        run: |
+          python src/generate_synthetic_data.py \
+            --out data/synthetic_claims.csv
+
+      - name: Register immutable training data
+        run: |
+          az ml data create \
+            --name nakoba-synthetic-claims \
+            --version "$GITHUB_SHA" \
+            --path data/synthetic_claims.csv \
+            --type uri_file \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE"
+
+      - name: Submit challenger training job
+        id: training
+        shell: bash
+        run: |
+          JOB_NAME=$(az ml job create \
+            --file jobs/train-job.yml \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE" \
+            --set inputs.claims_data.path="azureml:nakoba-synthetic-claims:${GITHUB_SHA}" \
+            --query name \
+            --output tsv)
+
+          echo "Training job: $JOB_NAME"
+          echo "job_name=$JOB_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for training job
+        shell: bash
         env:
-          APPROVER_IDENTITY: ${{ github.actor }}
-          APPROVAL_TIMESTAMP: ${{ github.event.head_commit.timestamp }}
-
-  promotion-gate:
-    needs: build-and-train
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Evaluate challenger against champion
+          JOB_NAME: ${{ steps.training.outputs.job_name }}
         run: |
+          while true; do
+            STATUS=$(az ml job show \
+              --name "$JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --workspace-name "$WORKSPACE" \
+              --query status \
+              --output tsv)
+
+            echo "Training status: $STATUS"
+
+            case "$STATUS" in
+              Completed)
+                break
+                ;;
+              Failed|Canceled|NotResponding)
+                echo "Training job did not complete successfully."
+                exit 1
+                ;;
+            esac
+
+            sleep 30
+          done
+
+      - name: Select immutable challenger model version
+        id: model_version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Challenger model version: $VERSION"
+
+      - name: Register exact challenger model artifact
+        shell: bash
+        env:
+          JOB_NAME: ${{ steps.training.outputs.job_name }}
+          MODEL_VERSION: ${{ steps.model_version.outputs.version }}
+        run: |
+          az ml model create \
+            --name "$CHALLENGER_MODEL_NAME" \
+            --version "$MODEL_VERSION" \
+            --path "azureml://jobs/${JOB_NAME}/outputs/artifacts/paths/model/" \
+            --type mlflow_model \
+            --description "Phase 8 challenger trained from GitHub commit ${GITHUB_SHA}" \
+            --tags \
+              stage=challenger \
+              source_job="$JOB_NAME" \
+              git_sha="$GITHUB_SHA" \
+              github_actor="$GITHUB_ACTOR" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE"
+
+  evaluate-models:
+    needs:
+      - apply-infra
+      - train-and-register
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Azure login with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure ML CLI extension
+        run: |
+          az extension add --name ml --yes
+
+      - name: Submit champion evaluation
+        id: champion_eval
+        shell: bash
+        run: |
+          JOB_NAME=$(az ml job create \
+            --file jobs/evaluate-champion.yml \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE" \
+            --set inputs.claims_data.path="azureml:nakoba-synthetic-claims:${GITHUB_SHA}" \
+                  inputs.model.path="azureml:${CHAMPION_MODEL_NAME}:${CHAMPION_MODEL_VERSION}" \
+            --query name \
+            --output tsv)
+
+          echo "Champion evaluation job: $JOB_NAME"
+          echo "job_name=$JOB_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Submit challenger evaluation
+        id: challenger_eval
+        shell: bash
+        env:
+          CHALLENGER_VERSION: ${{ needs.train-and-register.outputs.challenger_version }}
+        run: |
+          JOB_NAME=$(az ml job create \
+            --file jobs/evaluate-challenger.yml \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE" \
+            --set inputs.claims_data.path="azureml:nakoba-synthetic-claims:${GITHUB_SHA}" \
+                  inputs.model.path="azureml:${CHALLENGER_MODEL_NAME}:${CHALLENGER_VERSION}" \
+            --query name \
+            --output tsv)
+
+          echo "Challenger evaluation job: $JOB_NAME"
+          echo "job_name=$JOB_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for champion evaluation
+        shell: bash
+        env:
+          JOB_NAME: ${{ steps.champion_eval.outputs.job_name }}
+        run: |
+          while true; do
+            STATUS=$(az ml job show \
+              --name "$JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --workspace-name "$WORKSPACE" \
+              --query status \
+              --output tsv)
+
+            echo "Champion evaluation status: $STATUS"
+
+            case "$STATUS" in
+              Completed)
+                break
+                ;;
+              Failed|Canceled|NotResponding)
+                echo "Champion evaluation failed."
+                exit 1
+                ;;
+            esac
+
+            sleep 30
+          done
+
+      - name: Wait for challenger evaluation
+        shell: bash
+        env:
+          JOB_NAME: ${{ steps.challenger_eval.outputs.job_name }}
+        run: |
+          while true; do
+            STATUS=$(az ml job show \
+              --name "$JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --workspace-name "$WORKSPACE" \
+              --query status \
+              --output tsv)
+
+            echo "Challenger evaluation status: $STATUS"
+
+            case "$STATUS" in
+              Completed)
+                break
+                ;;
+              Failed|Canceled|NotResponding)
+                echo "Challenger evaluation failed."
+                exit 1
+                ;;
+            esac
+
+            sleep 30
+          done
+
+      - name: Download champion evaluation output
+        shell: bash
+        env:
+          JOB_NAME: ${{ steps.champion_eval.outputs.job_name }}
+        run: |
+          mkdir -p artifacts/champion
+
+          az ml job download \
+            --name "$JOB_NAME" \
+            --output-name evaluation_output \
+            --download-path artifacts/champion \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE"
+
+      - name: Download challenger evaluation output
+        shell: bash
+        env:
+          JOB_NAME: ${{ steps.challenger_eval.outputs.job_name }}
+        run: |
+          mkdir -p artifacts/challenger
+
+          az ml job download \
+            --name "$JOB_NAME" \
+            --output-name evaluation_output \
+            --download-path artifacts/challenger \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE"
+
+      - name: Locate evaluation artifacts
+        id: artifacts
+        shell: bash
+        run: |
+          CHAMPION_DIR=$(dirname "$(find artifacts/champion -name metrics.json -print -quit)")
+          CHALLENGER_DIR=$(dirname "$(find artifacts/challenger -name metrics.json -print -quit)")
+
+          if [ -z "$CHAMPION_DIR" ] || [ -z "$CHALLENGER_DIR" ]; then
+            echo "Could not locate evaluation metrics."
+            exit 1
+          fi
+
+          echo "Champion artifacts: $CHAMPION_DIR"
+          echo "Challenger artifacts: $CHALLENGER_DIR"
+
+          echo "champion_dir=$CHAMPION_DIR" >> "$GITHUB_OUTPUT"
+          echo "challenger_dir=$CHALLENGER_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Run champion versus challenger promotion gate
+        shell: bash
+        env:
+          CHAMPION_DIR: ${{ steps.artifacts.outputs.champion_dir }}
+          CHALLENGER_DIR: ${{ steps.artifacts.outputs.challenger_dir }}
+        run: |
+          CHAMPION_F1=$(python -c \
+            "import json; print(json.load(open('${CHAMPION_DIR}/metrics.json'))['f1'])")
+
+          CHALLENGER_F1=$(python -c \
+            "import json; print(json.load(open('${CHALLENGER_DIR}/metrics.json'))['f1'])")
+
+          CHAMPION_P95=$(python -c \
+            "import json; print(json.load(open('${CHAMPION_DIR}/metrics.json'))['p95_inference_latency_ms'])")
+
+          CHALLENGER_P95=$(python -c \
+            "import json; print(json.load(open('${CHALLENGER_DIR}/metrics.json'))['p95_inference_latency_ms'])")
+
+          echo "Champion F1: $CHAMPION_F1"
+          echo "Challenger F1: $CHALLENGER_F1"
+          echo "Champion p95: $CHAMPION_P95 ms"
+          echo "Challenger p95: $CHALLENGER_P95 ms"
+
           python scripts/promote_challenger.py \
-            --champion-f1 "$CHAMPION_F1" --challenger-f1 "$CHALLENGER_F1" \
-            --champion-p95-ms "$CHAMPION_P95" --challenger-p95-ms "$CHALLENGER_P95" \
-            --champion-segment-csv artifacts/champion_segment_eval_vehicle_model_line.csv \
-            --challenger-segment-csv artifacts/segment_eval_vehicle_model_line.csv
-        # NOTE: this job intentionally FAILS the pipeline (nonzero exit) if
-        # the challenger doesn't clear every gate — promotion is never
-        # automatic. A human approves the actual traffic shift afterward.
+            --champion-f1 "$CHAMPION_F1" \
+            --challenger-f1 "$CHALLENGER_F1" \
+            --champion-p95-ms "$CHAMPION_P95" \
+            --challenger-p95-ms "$CHALLENGER_P95" \
+            --champion-dealer-region-csv \
+              "$CHAMPION_DIR/segment_eval_dealer_region.csv" \
+            --challenger-dealer-region-csv \
+              "$CHALLENGER_DIR/segment_eval_dealer_region.csv" \
+            --champion-vehicle-model-line-csv \
+              "$CHAMPION_DIR/segment_eval_vehicle_model_line.csv" \
+            --challenger-vehicle-model-line-csv \
+              "$CHALLENGER_DIR/segment_eval_vehicle_model_line.csv"

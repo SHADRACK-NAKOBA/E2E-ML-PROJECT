@@ -20,3 +20,9 @@ resource "azurerm_role_assignment" "storage_blob_reader" {
   role_definition_name = "Storage Blob Data Reader"
   principal_id         = azurerm_user_assigned_identity.endpoint.principal_id
 }
+
+resource "azurerm_role_assignment" "acr_pull" {
+  scope                = var.acr_id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.endpoint.principal_id
+}

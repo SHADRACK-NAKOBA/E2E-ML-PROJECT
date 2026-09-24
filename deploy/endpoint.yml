@@ -8,6 +8,6 @@ auth_mode: aad_token  # AAD-token auth, not a static key — consistent with the
 identity:
   type: user_assigned
   user_assigned_identities:
-    - ${{env.ENDPOINT_IDENTITY_ID}}
+    - resource_id: ${{env.ENDPOINT_IDENTITY_ID}}
 tags:
   project: nakoba

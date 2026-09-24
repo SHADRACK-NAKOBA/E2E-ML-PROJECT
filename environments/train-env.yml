@@ -2,7 +2,7 @@
 # not an assumption about what happened to be installed on someone's laptop.
 $schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
 name: nakoba-train-env
-version: 1
+version: 3
 build:
   path: .
   dockerfile_path: Dockerfile

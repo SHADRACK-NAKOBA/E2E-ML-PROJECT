@@ -5,13 +5,13 @@
 $schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
 name: champion
 endpoint_name: nakoba-escalation-risk-ep
-model: azureml:nakoba-escalation-risk@latest   # pinned to a specific registered version at deploy time, not floating
-environment: azureml:nakoba-train-env@latest
+model: azureml:nakoba-escalation-risk:1   # pinned to a specific registered version at deploy time, not floating
+environment: azureml:nakoba-train-env:3
 code_configuration:
   code: ../src
   scoring_script: score.py
-instance_type: Standard_DS3_v2
-instance_count: 2
+instance_type: Standard_DS2_v2
+instance_count: 1
 request_settings:
   request_timeout_ms: 5000
   max_concurrent_requests_per_instance: 4

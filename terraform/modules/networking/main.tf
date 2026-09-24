@@ -13,7 +13,7 @@ resource "azurerm_virtual_network" "nakoba" {
 
 resource "azurerm_subnet" "ml" {
   name                 = "snet-ml-${var.environment}"
-  resource_group_name = var.resource_group_name
+  resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.nakoba.name
   address_prefixes     = ["10.20.1.0/24"]
 }
