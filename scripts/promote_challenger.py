@@ -150,4 +150,4 @@ if __name__ == "__main__":
     for reason in reasons:
         print(f"  - {reason}")
 
-    sys.exit(1)
+    sys.exit(2)

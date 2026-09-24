@@ -405,6 +405,8 @@ jobs:
           echo "Champion p95: $CHAMPION_P95 ms"
           echo "Challenger p95: $CHALLENGER_P95 ms"
 
+          set +e
+
           python scripts/promote_challenger.py \
             --champion-f1 "$CHAMPION_F1" \
             --challenger-f1 "$CHALLENGER_F1" \
@@ -418,3 +420,18 @@ jobs:
               "$CHAMPION_DIR/segment_eval_vehicle_model_line.csv" \
             --challenger-vehicle-model-line-csv \
               "$CHALLENGER_DIR/segment_eval_vehicle_model_line.csv"
+
+          GATE_EXIT_CODE=$?
+
+          set -e
+
+          if [ "$GATE_EXIT_CODE" -eq 0 ]; then
+            echo "Promotion gate result: APPROVED"
+            echo "The challenger passed all governance gates and is eligible for controlled promotion."
+          elif [ "$GATE_EXIT_CODE" -eq 2 ]; then
+            echo "Promotion gate result: BLOCKED"
+            echo "The challenger remains unpromoted. Existing champion remains active."
+          else
+            echo "Promotion gate encountered a technical failure (exit code $GATE_EXIT_CODE)."
+            exit "$GATE_EXIT_CODE"
+          fi
