@@ -45,3 +45,14 @@ def test_unknown_action_denied_by_default():
     guard = ActionAuthorizationGuard()
     with pytest.raises(AuthorizationDeniedError):
         guard.authorize("warranty_reviewer", "delete_all_claims")
+
+
+def test_prediction_authorized_for_supported_role():
+    guard = ActionAuthorizationGuard()
+    guard.authorize("dealer_rep", "predict_escalation_risk")
+
+
+def test_prediction_denied_for_unknown_role():
+    guard = ActionAuthorizationGuard()
+    with pytest.raises(AuthorizationDeniedError):
+        guard.authorize("guest", "predict_escalation_risk")

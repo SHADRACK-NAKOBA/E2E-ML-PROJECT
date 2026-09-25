@@ -14,8 +14,10 @@ from agentic.reliability import call_with_retry
 from agentic.tools import (
     ClaimStatusRequest,
     EscalateClaimRequest,
+    PredictEscalationRiskRequest,
     escalate_claim,
     get_claim_status,
+    predict_escalation_risk,
 )
 
 mcp = FastMCP("nakoba-warranty-claims")
@@ -29,6 +31,45 @@ def check_claim_status(claim_id: str, caller_role: str) -> dict:
     agent claims about itself."""
     request = ClaimStatusRequest(claim_id=claim_id, caller_role=caller_role)
     response = call_with_retry(lambda: get_claim_status(request))
+    return response.model_dump()
+
+
+@mcp.tool()
+def predict_claim_escalation_risk(
+    claim_id: str,
+    caller_role: str,
+    vehicle_model_line: str,
+    dealer_region: str,
+    component: str,
+    vehicle_age_months: int,
+    mileage_at_claim: float,
+    telemetry_fault_codes_30d: int,
+    telemetry_avg_engine_temp_delta: float,
+    component_historical_failure_severity: float,
+    prior_claims_same_vin: int,
+    dealer_avg_repair_days: float,
+) -> dict:
+    """Predict warranty-claim escalation risk using the deployed Azure ML
+    champion model. Authorization is enforced server-side before inference.
+    """
+    request = PredictEscalationRiskRequest(
+        claim_id=claim_id,
+        caller_role=caller_role,
+        vehicle_model_line=vehicle_model_line,
+        dealer_region=dealer_region,
+        component=component,
+        vehicle_age_months=vehicle_age_months,
+        mileage_at_claim=mileage_at_claim,
+        telemetry_fault_codes_30d=telemetry_fault_codes_30d,
+        telemetry_avg_engine_temp_delta=telemetry_avg_engine_temp_delta,
+        component_historical_failure_severity=component_historical_failure_severity,
+        prior_claims_same_vin=prior_claims_same_vin,
+        dealer_avg_repair_days=dealer_avg_repair_days,
+    )
+
+    response = call_with_retry(
+        lambda: predict_escalation_risk(request)
+    )
     return response.model_dump()
 
 

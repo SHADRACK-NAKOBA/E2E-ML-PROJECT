@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from agentic.azure_ml import invoke_escalation_model
 from rag.guardrails import ActionAuthorizationGuard, AuthorizationDeniedError
 
 
@@ -20,6 +21,28 @@ class ClaimStatusResponse(BaseModel):
     claim_id: str
     status: str
     escalation_risk_score: float | None = None
+    top_weighted_factors: list[str] = Field(default_factory=list)
+
+
+class PredictEscalationRiskRequest(BaseModel):
+    claim_id: str
+    caller_role: str
+    vehicle_model_line: str
+    dealer_region: str
+    component: str
+    vehicle_age_months: int = Field(ge=0)
+    mileage_at_claim: float = Field(ge=0)
+    telemetry_fault_codes_30d: int = Field(ge=0)
+    telemetry_avg_engine_temp_delta: float
+    component_historical_failure_severity: float = Field(ge=0)
+    prior_claims_same_vin: int = Field(ge=0)
+    dealer_avg_repair_days: float = Field(ge=0)
+
+
+class PredictEscalationRiskResponse(BaseModel):
+    claim_id: str
+    escalation_risk_score: float = Field(ge=0, le=1)
+    high_risk: bool
     top_weighted_factors: list[str] = Field(default_factory=list)
 
 
@@ -53,6 +76,23 @@ def get_claim_status(request: ClaimStatusRequest) -> ClaimStatusResponse:
         return ClaimStatusResponse(claim_id=request.claim_id, status="not_found")
 
     return ClaimStatusResponse(claim_id=request.claim_id, **record)
+
+
+def predict_escalation_risk(
+    request: PredictEscalationRiskRequest,
+) -> PredictEscalationRiskResponse:
+    _guard.authorize(request.caller_role, "predict_escalation_risk")
+
+    instance = request.model_dump(
+        exclude={"claim_id", "caller_role"}
+    )
+
+    prediction = invoke_escalation_model(
+        claim_id=request.claim_id,
+        instance=instance,
+    )
+
+    return PredictEscalationRiskResponse.model_validate(prediction)
 
 
 def escalate_claim(request: EscalateClaimRequest) -> EscalateClaimResponse:

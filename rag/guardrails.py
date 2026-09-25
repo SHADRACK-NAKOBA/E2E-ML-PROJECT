@@ -64,6 +64,7 @@ class ActionAuthorizationGuard:
     # from model output
     ACTION_PERMISSIONS: ClassVar[dict[str, set[str]]] = {
         "read_claim_status": {"technician", "dealer_rep", "warranty_reviewer"},
+        "predict_escalation_risk": {"technician", "dealer_rep", "warranty_reviewer"},
         "escalate_claim": {"technician", "warranty_reviewer"},
         "approve_claim_without_review": {"warranty_reviewer"},  # deliberately NOT reachable by a bare "technician" role
     }
