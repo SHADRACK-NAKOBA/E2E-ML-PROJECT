@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from agentic.azure_ml import invoke_escalation_model
 from rag.guardrails import ActionAuthorizationGuard, AuthorizationDeniedError
+from rag.run_live import ask_dealer_knowledge
 
 
 class ClaimStatusRequest(BaseModel):
@@ -44,6 +45,18 @@ class PredictEscalationRiskResponse(BaseModel):
     escalation_risk_score: float = Field(ge=0, le=1)
     high_risk: bool
     top_weighted_factors: list[str] = Field(default_factory=list)
+
+
+class DealerKnowledgeRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1000)
+    caller_role: str
+
+
+class DealerKnowledgeResponse(BaseModel):
+    answer: str
+    abstained: bool
+    grounding_score: float = Field(ge=0, le=1)
+    sources: list[str] = Field(default_factory=list)
 
 
 class EscalateClaimRequest(BaseModel):
@@ -93,6 +106,33 @@ def predict_escalation_risk(
     )
 
     return PredictEscalationRiskResponse.model_validate(prediction)
+
+
+def get_dealer_knowledge(
+    request: DealerKnowledgeRequest,
+) -> DealerKnowledgeResponse:
+    """Answer an authorized dealer-support question using grounded RAG."""
+    _guard.authorize(request.caller_role, "read_dealer_knowledge")
+
+    sensitivity_by_role = {
+        "technician": ["dealer_visible"],
+        "dealer_rep": ["dealer_visible"],
+        "warranty_reviewer": ["dealer_visible", "internal"],
+    }
+
+    allowed_sensitivity = sensitivity_by_role[request.caller_role]
+
+    response = ask_dealer_knowledge(
+        question=request.question,
+        allowed_sensitivity=allowed_sensitivity,
+    )
+
+    return DealerKnowledgeResponse(
+        answer=response.answer,
+        abstained=response.abstained,
+        grounding_score=response.grounding.max_retrieval_score,
+        sources=response.sources,
+    )
 
 
 def escalate_claim(request: EscalateClaimRequest) -> EscalateClaimResponse:

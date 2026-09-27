@@ -1,16 +1,21 @@
-variable "environment" {
-  description = "Deployment environment: dev, staging, or prod"
+variable "resource_group_name" {
+  description = "Resource group containing the AI platform resources"
   type        = string
-  validation {
-    condition     = contains(["dev", "staging", "prod"], var.environment)
-    error_message = "environment must be one of: dev, staging, prod."
-  }
 }
 
 variable "location" {
-  description = "Azure region"
+  description = "Azure region for AI resources"
   type        = string
-  default     = "eastus2"
+}
+
+variable "environment" {
+  description = "Deployment environment"
+  type        = string
+}
+
+variable "tags" {
+  description = "Common resource tags"
+  type        = map(string)
 }
 
 variable "embedding_model_name" {
@@ -27,7 +32,6 @@ variable "embedding_model_version" {
 variable "chat_model_name" {
   description = "Azure OpenAI chat model name"
   type        = string
-  default     = "gpt-5.6-sol"
 }
 
 variable "chat_model_version" {
@@ -38,5 +42,4 @@ variable "chat_model_version" {
 variable "search_location" {
   description = "Azure region for the Azure AI Search service"
   type        = string
-  default     = "eastus"
 }

@@ -1,18 +1,17 @@
 """
 Retrieval: hybrid (vector + keyword) search against Azure AI Search, with
-metadata filtering applied BEFORE anything reaches the model — sensitivity
-and source filters are query-time index filters, not a prompt instruction
-the model could be talked out of. See rag/guardrails.py for why that
-distinction matters.
+metadata filtering applied BEFORE anything reaches the model.
 
-Hybrid, not vector-only, because service bulletins and repair procedures are
-full of exact strings — part numbers, bulletin IDs, DTC codes — that vector
-similarity alone handles poorly; keyword search catches those, vector search
-catches paraphrase/semantic matches, and the reranker combines both signals.
+Azure AI Search hybrid results use ranking scores (for example RRF scores)
+that are useful for ordering candidates but are not calibrated confidence
+scores. The reranker therefore produces the normalized relevance score used
+by the downstream groundedness gate.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from azure.search.documents.models import VectorizedQuery
 
 
 @dataclass
@@ -22,30 +21,32 @@ class RetrievedChunk:
     source: str
     source_doc_id: str
     score: float
+    search_score: float | None = None
 
 
 def hybrid_search(
     query: str,
-    search_client,        # azure.search.documents.SearchClient, injected
-    embed_fn,              # same embedding fn used at ingest time
+    search_client,
+    embed_fn,
     allowed_sensitivity: list[str],
     top_k: int = 20,
 ) -> list[RetrievedChunk]:
-    """Runs vector search and keyword search against the same index and
-    returns the combined candidate set. Filtering by sensitivity happens
-    in the search query itself (an index-level filter), not as something
-    the model is asked to respect after the fact."""
+    """Run hybrid keyword + vector retrieval with index-level filtering."""
     query_vector = embed_fn([query])[0]
 
-    sensitivity_filter = " or ".join(f"sensitivity eq '{s}'" for s in allowed_sensitivity)
+    sensitivity_filter = " or ".join(
+        f"sensitivity eq '{s}'" for s in allowed_sensitivity
+    )
+
+    vector_query = VectorizedQuery(
+        vector=query_vector,
+        k_nearest_neighbors=top_k,
+        fields="content_vector",
+    )
 
     results = search_client.search(
-        search_text=query,                 # keyword/BM25 leg of the hybrid search
-        vector_queries=[{
-            "vector": query_vector,          # vector leg
-            "k_nearest_neighbors": top_k,
-            "fields": "content_vector",
-        }],
+        search_text=query,
+        vector_queries=[vector_query],
         filter=sensitivity_filter,
         top=top_k,
     )
@@ -56,19 +57,63 @@ def hybrid_search(
             text=r["text"],
             source=r["source"],
             source_doc_id=r["source_doc_id"],
-            score=r["@search.score"],
+            score=float(r["@search.score"]),
+            search_score=float(r["@search.score"]),
         )
         for r in results
     ]
 
 
-def rerank(query: str, candidates: list[RetrievedChunk], rerank_fn, top_n: int = 6) -> list[RetrievedChunk]:
-    """rerank_fn: callable(query, list[str]) -> list[float] cross-encoder
-    scores, injected for the same swappability reason as embed_fn. Reranking
-    the combined hybrid candidate set, rather than trusting either leg's raw
-    score, is what keeps a high keyword-match-but-irrelevant chunk from
-    outranking a genuinely relevant paraphrase."""
-    texts = [c.text for c in candidates]
+def rerank(
+    query: str,
+    candidates: list[RetrievedChunk],
+    rerank_fn,
+    top_n: int = 6,
+) -> list[RetrievedChunk]:
+    """Rerank hybrid candidates and preserve reranker relevance scores.
+
+    rerank_fn(query, texts) must return one normalized relevance score in
+    the range [0, 1] for every candidate. These scores, rather than Azure
+    hybrid/RRF ranking scores, are used by the groundedness gate.
+    """
+    if not candidates:
+        return []
+
+    texts = [candidate.text for candidate in candidates]
     scores = rerank_fn(query, texts)
-    ranked = sorted(zip(candidates, scores), key=lambda pair: pair[1], reverse=True)
-    return [c for c, _ in ranked[:top_n]]
+
+    if len(scores) != len(candidates):
+        raise ValueError(
+            "rerank_fn must return exactly one score for every candidate"
+        )
+
+    scored: list[RetrievedChunk] = []
+
+    for candidate, score in zip(candidates, scores):
+        relevance_score = float(score)
+
+        if not 0.0 <= relevance_score <= 1.0:
+            raise ValueError(
+                "rerank_fn scores must be normalized to the range [0, 1]"
+            )
+
+        scored.append(
+            RetrievedChunk(
+                chunk_id=candidate.chunk_id,
+                text=candidate.text,
+                source=candidate.source,
+                source_doc_id=candidate.source_doc_id,
+                score=relevance_score,
+                search_score=(
+                    candidate.search_score
+                    if candidate.search_score is not None
+                    else candidate.score
+                ),
+            )
+        )
+
+    return sorted(
+        scored,
+        key=lambda chunk: chunk.score,
+        reverse=True,
+    )[:top_n]

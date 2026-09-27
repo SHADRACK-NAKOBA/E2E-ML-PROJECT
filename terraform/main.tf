@@ -57,3 +57,33 @@ locals {
     managed_by  = "terraform"
   }
 }
+
+module "ai" {
+  source = "./modules/ai"
+
+  resource_group_name = azurerm_resource_group.nakoba.name
+  location            = azurerm_resource_group.nakoba.location
+  search_location     = var.search_location
+  environment         = var.environment
+  tags                = local.tags
+
+  embedding_model_name    = var.embedding_model_name
+  embedding_model_version = var.embedding_model_version
+  chat_model_name         = var.chat_model_name
+  chat_model_version      = var.chat_model_version
+}
+
+# Runtime RAG permissions for the Azure ML endpoint identity.
+# Keep runtime read/inference-only; ingestion and index administration use separate permissions.
+
+resource "azurerm_role_assignment" "endpoint_openai_user" {
+  scope                = module.ai.openai_account_id
+  role_definition_name = "Cognitive Services OpenAI User"
+  principal_id         = module.identity.endpoint_identity_principal_id
+}
+
+resource "azurerm_role_assignment" "endpoint_search_reader" {
+  scope                = module.ai.search_service_id
+  role_definition_name = "Search Index Data Reader"
+  principal_id         = module.identity.endpoint_identity_principal_id
+}

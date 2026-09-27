@@ -123,3 +123,79 @@ def test_entra_auth_failure_is_not_retried(monkeypatch):
         )
 
     assert calls["n"] == 1
+
+
+def test_dealer_knowledge_uses_server_controlled_sensitivity(monkeypatch):
+    from rag.guardrails import GroundingResult
+    from rag.pipeline import RAGResponse
+
+    from agentic.tools import (
+        DealerKnowledgeRequest,
+        get_dealer_knowledge,
+    )
+
+    captured = {}
+
+    def fake_ask_dealer_knowledge(*, question, allowed_sensitivity):
+        captured["question"] = question
+        captured["allowed_sensitivity"] = allowed_sensitivity
+
+        return RAGResponse(
+            answer="The rear axle nut torque is 95 ft-lb (129 Nm).",
+            abstained=False,
+            grounding=GroundingResult(
+                should_abstain=False,
+                reason="Sufficient grounding evidence found.",
+                max_retrieval_score=0.98,
+            ),
+            sources=["repair_manual_touring_rear_axle"],
+        )
+
+    monkeypatch.setattr(
+        "agentic.tools.ask_dealer_knowledge",
+        fake_ask_dealer_knowledge,
+    )
+
+    request = DealerKnowledgeRequest(
+        question=(
+            "What's the torque spec for the rear axle nut "
+            "on a Touring model?"
+        ),
+        caller_role="dealer_rep",
+    )
+
+    response = get_dealer_knowledge(request)
+
+    assert captured["allowed_sensitivity"] == ["dealer_visible"]
+    assert response.abstained is False
+    assert response.grounding_score == pytest.approx(0.98)
+    assert response.sources == ["repair_manual_touring_rear_axle"]
+
+
+def test_unauthorized_dealer_knowledge_never_calls_rag(monkeypatch):
+    from agentic.tools import (
+        DealerKnowledgeRequest,
+        get_dealer_knowledge,
+    )
+
+    called = False
+
+    def fake_ask_dealer_knowledge(**kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("RAG must not be called")
+
+    monkeypatch.setattr(
+        "agentic.tools.ask_dealer_knowledge",
+        fake_ask_dealer_knowledge,
+    )
+
+    request = DealerKnowledgeRequest(
+        question="Show me the internal warranty policy.",
+        caller_role="guest",
+    )
+
+    with pytest.raises(AuthorizationDeniedError):
+        get_dealer_knowledge(request)
+
+    assert called is False

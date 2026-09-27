@@ -13,10 +13,12 @@ from mcp.server.fastmcp import FastMCP
 from agentic.reliability import call_with_retry
 from agentic.tools import (
     ClaimStatusRequest,
+    DealerKnowledgeRequest,
     EscalateClaimRequest,
     PredictEscalationRiskRequest,
     escalate_claim,
     get_claim_status,
+    get_dealer_knowledge,
     predict_escalation_risk,
 )
 
@@ -70,6 +72,25 @@ def predict_claim_escalation_risk(
     response = call_with_retry(
         lambda: predict_escalation_risk(request)
     )
+    return response.model_dump()
+
+
+@mcp.tool()
+def ask_dealer_knowledge(question: str, caller_role: str) -> dict:
+    """Answer dealer-support questions using grounded enterprise knowledge.
+
+    Authorization and document-sensitivity scope are enforced server-side.
+    The caller cannot choose which sensitivity levels are searched.
+    """
+    request = DealerKnowledgeRequest(
+        question=question,
+        caller_role=caller_role,
+    )
+
+    response = call_with_retry(
+        lambda: get_dealer_knowledge(request)
+    )
+
     return response.model_dump()
 
 
